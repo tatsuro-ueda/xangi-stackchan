@@ -1,0 +1,23 @@
+[project]
+name = "xangi-stackchan"
+version = "0.1.0"
+description = "Physical xangi pet bridge for stackchan family devices (K151 / stackchan-atama)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pyserial>=3.5",
+  "requests>=2.31",
+]
+
+[project.scripts]
+xangi-stackchan = "xangi_stackchan.app:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

@@ -1,0 +1,20 @@
+# xangi-stackchan udev rules
+#
+# /dev/stackchan を ESP32-S3 (CoreS3 / K151) や CP2104 (Core / Core2) 系の
+# 物理デバイスに対する固定 SYMLINK として割り当てる。これで Python ホスト
+# ブリッジ側 (src/xangi_stackchan/stackchan.py::detect_serial_port) が
+# `/dev/ttyACMx` の番号変動に振り回されず安定して接続できる。
+#
+# Install (Linux):
+#   sudo cp udev/99-xangi-stackchan.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#   sudo udevadm trigger
+#
+# 参考: karaage0703/stackchan-atama の udev/99-stackchan.rules
+#       (CC0 / MIT 相当の最小設定を踏襲、SYMLINK 名のみ揃える)
+
+# M5Stack CoreS3 / K151 (ESP32-S3 USB JTAG/serial)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="stackchan", MODE="0666"
+
+# M5Stack Core / Core2 (CP2104 USB to UART)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="stackchan", MODE="0666"

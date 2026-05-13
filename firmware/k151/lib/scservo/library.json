@@ -1,0 +1,9 @@
+{
+  "name": "scservo",
+  "version": "0.1.0",
+  "description": "Feetech SCS シリアルバスサーボ用 Arduino ライブラリ。",
+  "keywords": "scservo, feetech, k151, stackchan",
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}
