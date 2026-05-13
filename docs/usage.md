@@ -1,0 +1,228 @@
+# 使い方
+
+xangi-stackchan のセットアップから常駐起動・デモ・トラブルシュートまで。
+
+## セットアップ
+
+```bash
+git clone https://github.com/karaage0703/xangi-stackchan.git
+cd xangi-stackchan
+uv sync
+```
+
+### piper-plus のセットアップ
+
+piper-plus を使う場合は、このリポジトリ内でセットアップする。
+
+```bash
+./scripts/setup_piper.sh
+```
+
+セットアップ後は、以下の相対パスが既定値として使われる。
+
+- piper bin: `tools/piper`
+- piper model: `models/tsukuyomi-chan-6lang-fp16.onnx`
+- piper config: `models/config.json`
+
+`PIPER_BIN` / `PIPER_MODEL` 環境変数や CLI オプションで上書きできるが、通常は指定不要。
+
+### udev ルール (Linux、オプション)
+
+`/dev/stackchan` を固定 SYMLINK で割り当てたい場合 (`/dev/ttyACMx` の番号変動を避ける):
+
+```bash
+sudo cp udev/99-xangi-stackchan.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger
+```
+
+対応デバイス: ESP32-S3 (CoreS3 / K151) と CP2104 (Core / Core2)。Mac / Windows ではこの手順は不要 (Python 側で自動検出)。
+
+## 起動
+
+### 最小起動
+
+USB 接続したスタックチャン (K151 / atama 共通) を動かす最小例。
+
+```bash
+uv run xangi-stackchan \
+  --xangi-url http://127.0.0.1:18888 \
+  --port /dev/stackchan \
+  --baud 115200 \
+  --volume 200 \
+  --tts piper
+```
+
+`--xangi-url` で接続先の xangi を選ぶ。複数 xangi を建てている場合は、対象インスタンスの URL を指定する。
+
+起動すると設定 UI も立ち上がる。
+
+```text
+http://127.0.0.1:7897/
+```
+
+UI から以下を変更できる。
+
+- xangi URL
+- thread filter
+- USB / WiFi 接続先
+- 音量
+- TTS 設定
+- 状態ごとの表情
+
+保存すると `~/.xangi/xangi-stackchan/config.json` に永続化し、実行中デーモンにも反映する。xangi URL を変更した場合はストリームを張り直す。
+
+設定 UI を LAN / Tailscale 経由でも開きたい場合は `--settings-bind 0.0.0.0` を付ける (既定は `127.0.0.1`)。
+
+### WiFi HTTP API (atama 機向け、K151 は USB 推奨)
+
+```bash
+uv run xangi-stackchan \
+  --xangi-url http://127.0.0.1:18888 \
+  --wifi \
+  --host 192.168.1.6 \
+  --volume 200 \
+  --tts piper
+```
+
+### 設定 UI を無効化
+
+```bash
+uv run xangi-stackchan --no-settings-ui ...
+```
+
+### 常駐起動
+
+チャット連携で使う場合は、ターミナル終了で落ちないように常駐起動する。
+
+```bash
+setsid -f bash -c 'cd /path/to/xangi-stackchan && exec uv run xangi-stackchan \
+  --xangi-url http://127.0.0.1:18888 \
+  --port /dev/stackchan \
+  --baud 115200 \
+  --volume 200 \
+  --tts piper \
+  --stackchan-retry-seconds 3 \
+  --settings-port 7897' </dev/null >>/tmp/xangi-stackchan.log 2>&1
+```
+
+ログ確認:
+
+```bash
+tail -f /tmp/xangi-stackchan.log
+```
+
+## piper-plus の推奨設定
+
+つくよみちゃん 6-language モデルでは以下を既定値にしている。
+
+- `PIPER_LANGUAGE=ja-en-zh-es-fr-pt`
+- `PIPER_LENGTH_SCALE=1.5`
+- `PIPER_NOISE_SCALE=0.667`
+
+`PiperPlus.Cli --json-input` を常駐させるため、初回以外はモデルロードを避けられる。出力ファイルはサイズが安定してから読み込むため、0 byte WAV を送る race を避ける。
+
+`piper speaker` はマルチスピーカーモデル用の話者 ID。つくよみちゃん 6-language モデルでは通常 `0` のままでよいので、設定 UI には出していない。必要な場合だけ `--piper-speaker <id>` で指定する。
+
+## 主なオプション
+
+- `--xangi-url`: xangi base URL または `/api/events/stream` の完全 URL (既定 `http://127.0.0.1:18888`)
+- `--thread-id`: 対象 thread のみ処理
+- `--settings-port`: 設定 UI の port (既定 `7897`)
+- `--settings-bind`: 設定 UI の listen アドレス (既定 `127.0.0.1`、LAN/Tailscale 公開時は `0.0.0.0`)
+- `--no-settings-ui`: 設定 UI を起動しない
+- `--wifi --host`: USB ではなく WiFi API を使う (atama 機向け)
+- `--port --baud`: USB serial のポートと baudrate
+- `--volume`: デバイスの音量 (`0`〜`255`、既定 `255`)
+- `--tts`: `piper`, `voicevox`, `none`
+- `--piper-bin`: piper-plus 実行ファイル (既定 `tools/piper`)
+- `--piper-model`: piper-plus モデル (既定 `models/tsukuyomi-chan-6lang-fp16.onnx`)
+- `--piper-speaker`: マルチスピーカーモデル用の話者 ID (通常不要)
+- `--face-idle`, `--face-thinking`, `--face-talking`, `--face-error`: 状態ごとの表情
+- `--move-enabled` / `--no-move-enabled`: 首振り (MOVE) 機能 ON/OFF (既定 ON、K151 SCServo 専用)
+- `--move-idle-yaw` / `--move-idle-pitch`: idle 時の首ポーズ (既定 `0` / `+5`、少し上向き)
+- `--move-thinking-yaw` / `--move-thinking-pitch`: 考え中の首ポーズ (既定 `-8` / `+5`、少し首かしげ)
+- `--move-error-yaw` / `--move-error-pitch`: エラー時の首ポーズ (既定 `0` / `-10`、首下げ)
+- `--move-talking-sway-yaw` / `--move-talking-sway-pitch`: 喋り中のランダム揺らぎ振り幅 (既定 `±4` / `±2`)
+- `--move-talking-sway-interval`: 喋り中のランダム揺らぎ更新間隔 (秒、既定 `1.5`)
+- `--stackchan-retry-seconds`: デバイス切断時の再接続間隔 (秒)
+
+## 動作確認
+
+```bash
+uv run python -m py_compile src/xangi_stackchan/*.py
+uv run pytest
+```
+
+実機テスト用 (xangi に向かって投げる):
+
+```bash
+curl -sN -X POST http://127.0.0.1:18888/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"接続テストです。「接続テスト成功」とだけ返してください。"}'
+```
+
+## デモスクリプト
+
+### ダンスデモ (K151 サーボ機専用)
+
+テキストを piper TTS で喋らせつつ BPM 駆動の連続パターンで首を振る単発デモ。
+動作中の xangi-stackchan の内側で実行できるので、USB シリアルの取り合いなしで動かせる。
+
+プリセット (yaw / pitch はファーム SAFE 範囲 yaw ±100° / pitch ±30° の内側で抑え):
+
+| preset | BPM | yaw 振幅 | pitch 振幅 | 雰囲気 |
+|--------|-----|---------|-----------|--------|
+| happy  | 120 | ±20°    | ±5°       | 元気に左右、軽い縦ノリ |
+| chill  | 70  | ±10°    | ±2°       | ゆっくり左右 |
+| wave   | 100 | ±15°    | ±5°       | 8 の字風 |
+
+#### A. settings UI から (xangi-stackchan が動いてる前提)
+
+ブラウザで <http://127.0.0.1:7897/> を開くと、ページ下部に「dance demo」フォームがある。
+text と preset (任意で BPM) を入れて送信すると、xangi-stackchan が現在使っている TTS /
+backend / 表情のままダンスデモを実行する。実行中に xangi の実会話 (`turn.complete`)
+が来た場合は、`send_wav` のキューで順番待ちになる (デモ全部喋り終わってから次の発話)。
+
+#### B. CLI 経由 (xangi-stackchan に POST)
+
+```bash
+uv run python scripts/dance_demo.py --text "踊るよ" --preset happy \
+    --via-bridge http://127.0.0.1:7897
+```
+
+`--via-bridge` を指定すると `POST /api/demo` で動作中の xangi-stackchan にお願いする
+モードになる。USB シリアルは xangi-stackchan が掴んだまま、内部でダンスする。
+
+#### C. CLI 直接モード (xangi-stackchan 停止時のスタンドアロン)
+
+```bash
+uv run python scripts/dance_demo.py --text "踊るよ" --preset happy
+uv run python scripts/dance_demo.py --text "ゆっくり話すよ" --preset chill --bpm 60
+uv run python scripts/dance_demo.py --text "TTS だけ確認" --dry-run    # シリアル不要
+```
+
+`--via-bridge` を付けない場合は CLI 側で piper を起動し、シリアルを直接掴んで再生する。
+xangi-stackchan が動いていると ttyACM0 が競合するので、その場合は停止してから実行する
+(または上の A / B を使う)。`--bpm` で各プリセットの BPM を上書き、`--idle-yaw` /
+`--idle-pitch` で基準位置を変更可。
+
+### ファーム単体テスト
+
+```bash
+uv run python scripts/test_xangi_bridge.py --port /dev/stackchan
+```
+
+STATUS / VOLUME / FACE / MOVE / WAV (440Hz トーン) の往復を 1 ショットで確認する。
+
+## トラブルシュート
+
+- **Permission denied (Linux)**: `sudo usermod -aG dialout $USER` して再ログイン
+- **ポートが見つからない**: USB ケーブルがデータ転送対応か確認 (充電専用ケーブルは NG)
+- **間違ったポートが選ばれる (複数 ESP32 接続時)**: `--port /dev/cu.usbmodem3101` または udev rules で `/dev/stackchan` を固定
+- **音が鳴らない**: `--volume 255` で最大音量
+- **発話開始が遅い**: piper-plus は JSONL 入力の常駐プロセスとして保持する設計のため、初回だけモデルロードが入る。2 回目以降のレスポンスは低遅延になる
+- **piper-plus の発話速度を変えたい**: `PIPER_LENGTH_SCALE=1.2` のように小さくすると速くなる (既定はモデルカード推奨の `1.5`)。発音品質とのトレードオフ
+- **シリアルポートが掴まれている**: `lsof /dev/ttyACM0` で確認、`fuser -k /dev/ttyACM0` で解放。常駐起動した自分自身が掴んでる場合は kill してから再起動
+- **`piper failed: ... Opset 5 ... opset 3 only` エラー**: 初回実行で生成された最適化キャッシュが onnxruntime と互換性が無い状態。`rm models/*.cpu.opt.onnx*` で解消
+- **VOICEVOX 接続エラー**: `docker ps` でコンテナ起動確認、または `curl http://localhost:50021/version` で疎通確認
