@@ -105,10 +105,17 @@ def get_current_time_face(now_fn=None) -> str:
 
 
 class ClockSyncLoop:
-    def __init__(self, backend, now_fn=None, interval_seconds: float = 60.0):
+    def __init__(
+        self,
+        backend,
+        now_fn=None,
+        interval_seconds: float = 60.0,
+        on_sync=None,
+    ):
         self.backend = backend
         self.now_fn = now_fn or time.localtime
         self.interval_seconds = interval_seconds
+        self.on_sync = on_sync
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="clock-sync", daemon=True)
 
@@ -137,6 +144,11 @@ class ClockSyncLoop:
             log({"clock": "firmware_error", "result": result})
             return False
         log({"clock": command[5:], "result": result})
+        if self.on_sync is not None:
+            try:
+                self.on_sync(hour, minute)
+            except Exception as exc:
+                log({"clock": "on_sync_error", "error": str(exc)})
         return True
 
     def _run(self):
@@ -817,7 +829,21 @@ def run_bridge(state: RuntimeState):
                 set_puzzle_light_if_needed(
                     backend, config, config.puzzle_idle, current_puzzle, puzzle_supported
                 )
-                clock_sync = ClockSyncLoop(backend)
+                def _refresh_idle_face_after_clock_sync(_hour, _minute):
+                    if active_turn is not None:
+                        return
+                    if getattr(backend, "_mic_recording", False):
+                        return
+                    if getattr(backend, "_wav_active", False):
+                        return
+                    set_idle_visual_face(
+                        backend, config, current_face, sprite_renderer, sprite_animator
+                    )
+
+                clock_sync = ClockSyncLoop(
+                    backend,
+                    on_sync=_refresh_idle_face_after_clock_sync,
+                )
                 clock_sync.start()
                 if config.tts != "none":
                     hourly_chime = HourlyChimeLoop(
