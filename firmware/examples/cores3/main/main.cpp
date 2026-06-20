@@ -512,6 +512,14 @@ static bool drawClockOverlayOn(Gfx& gfx) {
     return true;
 }
 
+extern "C" void xangi_avatar_overlay(M5Canvas* sprite) {
+    if (!sprite) return;
+    bool clock_visible = drawClockOverlayOn(*sprite);
+    g_clock_last_visible = clock_visible;
+    g_clock_dirty = false;
+    g_last_clock_draw_ms = millis();
+}
+
 static void drawClockOverlay() {
     uint32_t now_ms = millis();
     bool visible = clockVisibleAt(now_ms);
@@ -601,7 +609,7 @@ static void handleStatus() {
     uint32_t now_ms = millis();
     bool clock_visible = clockVisibleAt(now_ms);
     uint32_t clock_age_ms = clockAgeMs(now_ms);
-    Serial.printf("{\"state\":\"%s\",\"volume\":%u,\"version\":\"cores3-main-0.20\","
+    Serial.printf("{\"state\":\"%s\",\"volume\":%u,\"version\":\"cores3-main-0.21\","
                   "\"servo\":%s,\"torque\":%s,\"camera\":%s,\"head_touch\":%s,"
                   "\"puzzle\":%s,\"puzzle_pattern\":\"%s\","
                   "\"stack_led\":%s,\"stack_led_pattern\":\"%s\","
@@ -1785,7 +1793,7 @@ void setup() {
     Serial.begin(SERIAL_BAUD);
     delay(100);
     Serial.println();
-    Serial.println("[bridge] xangi-stackchan / cores3-main 0.20 (avatar+spriteface+battery+clock+servo+wavqueue+camera+touchstop+micbutton+headtouch+headavatar+headpetsound+mic+micguard+micwatchdog+avtoggle+ackflush+i2c1task+resetreason)");
+    Serial.println("[bridge] xangi-stackchan / cores3-main 0.21 (avatar+spriteface+battery+clock+servo+wavqueue+camera+touchstop+micbutton+headtouch+headavatar+headpetsound+mic+micguard+micwatchdog+avtoggle+ackflush+i2c1task+resetreason)");
 
     // 直前のリセット理由を boot で必ず 1 行残す。panic / watchdog / brownout 等の
     // 「いつの間にか再起動していた」事象の一次証拠になる (host 側ログに残る)。
@@ -1898,12 +1906,15 @@ void loop() {
         if (g_clock_dirty || clock_visible_now != g_clock_last_visible) {
             g_image_face_dirty = true;
         }
-    } else if (
-        g_clock_dirty
-        || clock_visible_now != g_clock_last_visible
-        || (clock_visible_now && now_ms - g_last_clock_draw_ms >= CLOCK_DRAW_INTERVAL_MS)
-    ) {
-        drawClockOverlay();
+    } else {
+        // Avatar mode draws the clock inside M5Stack-Avatar's own sprite hook.
+        // Drawing directly on M5.Display races with Avatar's draw task and can
+        // panic in the SPI transaction mutex.
+        if (g_clock_dirty || clock_visible_now != g_clock_last_visible) {
+            g_clock_last_visible = clock_visible_now;
+            g_clock_dirty = false;
+            g_last_clock_draw_ms = now_ms;
+        }
     }
     if (g_image_face_active && millis() - g_last_battery_update_ms < 5) {
         g_image_face_dirty = true;
