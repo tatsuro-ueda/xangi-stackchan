@@ -9,6 +9,7 @@
 - xangi が考え始めるとデバイスが `doubt` 顔 + 首をかしげる
 - xangi が話し始めると `happy` 顔になる
 - `turn.complete` の最終テキストを piper-plus / VOICEVOX で音声化して再生。再生中は首がささやかに揺れる
+- **時報**: 午前7時から午後9時まで、毎時00分に `午後3時です` のように短く発話する。会話中・録音中・WAV再生中は鳴らさない
 - 完了後は `neutral` 顔 + idle ポーズに戻る
 - `agent.error` では `sad` 顔 + 首を下げる
 - **スプライト顔モード (`--face-mode sprite`)**: `spritesheet.webp` を LCD 用 JPEG に変換して表示。row/state + filled-frame tick でまばたき/表情アニメーションする。スプライト本体は `assets/pets/...` にローカル配置し、リポジトリにはコミットしない

@@ -63,6 +63,16 @@ def format_clock_command(hour: int, minute: int) -> str:
     return f"TIME:{hour:02d}:{minute:02d}"
 
 
+def format_hourly_chime_text(hour: int) -> str | None:
+    if hour < 7 or hour > 21:
+        return None
+    if hour == 12:
+        return "正午です"
+    if hour < 12:
+        return f"午前{hour}時です"
+    return f"午後{hour - 12}時です"
+
+
 class ClockSyncLoop:
     def __init__(self, backend, now_fn=None, interval_seconds: float = 60.0):
         self.backend = backend
@@ -97,6 +107,85 @@ class ClockSyncLoop:
             return False
         log({"clock": command[5:], "result": result})
         return True
+
+    def _run(self):
+        self._send_once()
+        while not self._stop.wait(self.interval_seconds):
+            self._send_once()
+
+
+class HourlyChimeLoop:
+    def __init__(
+        self,
+        backend,
+        config,
+        piper_process,
+        now_fn=None,
+        interval_seconds: float = 15.0,
+        can_speak_fn=None,
+        speak_fn=None,
+    ):
+        self.backend = backend
+        self.config = config
+        self.piper_process = piper_process
+        self.now_fn = now_fn or time.localtime
+        self.interval_seconds = interval_seconds
+        self.can_speak_fn = can_speak_fn
+        self.speak_fn = speak_fn or speak_text
+        self._last_chime_key: str | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="hourly-chime", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+
+    def _time_parts(self) -> tuple[int, int, str]:
+        now = self.now_fn()
+        hour = int(getattr(now, "hour", getattr(now, "tm_hour", 0)))
+        minute = int(getattr(now, "minute", getattr(now, "tm_min", 0)))
+        year = int(getattr(now, "year", getattr(now, "tm_year", 0)))
+        month = int(getattr(now, "month", getattr(now, "tm_mon", 0)))
+        day = int(getattr(now, "day", getattr(now, "tm_mday", 0)))
+        return hour, minute, f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}"
+
+    def _can_speak_now(self) -> bool:
+        if self.can_speak_fn is not None and not self.can_speak_fn():
+            return False
+        if getattr(self.backend, "_mic_recording", False):
+            return False
+        if getattr(self.backend, "_wav_active", False):
+            return False
+        return True
+
+    def _should_chime_now(self, minute: int, text: str | None, chime_key: str) -> bool:
+        if minute != 0 or text is None:
+            return False
+        return self._last_chime_key != chime_key
+
+    def _speak_chime(self, text: str) -> bool:
+        try:
+            self.speak_fn(self.backend, text, self.config, self.piper_process)
+        except Exception as exc:
+            log({"hourly_chime": "speak_error", "text": text, "error": str(exc)})
+            return False
+        log({"hourly_chime": text})
+        return True
+
+    def _send_once(self):
+        hour, minute, chime_key = self._time_parts()
+        text = format_hourly_chime_text(hour)
+        if not self._should_chime_now(minute, text, chime_key):
+            return False
+        if not self._can_speak_now():
+            log({"hourly_chime": "skipped_busy", "hour": hour})
+            return False
+
+        self._last_chime_key = chime_key
+        return self._speak_chime(text)
 
     def _run(self):
         self._send_once()
@@ -557,10 +646,16 @@ def close_runtime(
     state=None,
     sprite_animator=None,
     clock_sync=None,
+    hourly_chime=None,
     current_puzzle=None,
     puzzle_supported=None,
 ):
     try:
+        if hourly_chime is not None:
+            try:
+                hourly_chime.stop()
+            except Exception:
+                pass
         if clock_sync is not None:
             try:
                 clock_sync.stop()
@@ -615,6 +710,7 @@ def run_bridge(state: RuntimeState):
     voice_conv = None
     sprite_animator = None
     clock_sync = None
+    hourly_chime = None
     current_face: list[str | None] = [None]
     current_move: list[float | None] = [None, None]
     current_puzzle: list[dict[str, str] | None] = [None]
@@ -629,10 +725,12 @@ def run_bridge(state: RuntimeState):
             if version != active_version:
                 close_runtime(
                     backend, piper_process, current_face, current_move, config,
-                    voice_conv, state, sprite_animator, clock_sync, current_puzzle, puzzle_supported
+                    voice_conv, state, sprite_animator, clock_sync, hourly_chime,
+                    current_puzzle, puzzle_supported
                 )
                 sprite_animator = None
                 clock_sync = None
+                hourly_chime = None
                 state.set_runtime(None, None)
                 backend = open_backend_with_retry(config)
                 piper_process = None
@@ -672,6 +770,14 @@ def run_bridge(state: RuntimeState):
                 )
                 clock_sync = ClockSyncLoop(backend)
                 clock_sync.start()
+                if config.tts != "none":
+                    hourly_chime = HourlyChimeLoop(
+                        backend,
+                        config,
+                        piper_process,
+                        can_speak_fn=lambda: active_turn is None,
+                    )
+                    hourly_chime.start()
                 if config.move_enabled:
                     set_move_if_needed(
                         backend, config.move_idle_yaw, config.move_idle_pitch, current_move
@@ -1091,7 +1197,8 @@ def run_bridge(state: RuntimeState):
         state.set_runtime(None, None)
         close_runtime(
             backend, piper_process, current_face, current_move, config,
-            voice_conv, state, sprite_animator, clock_sync, current_puzzle, puzzle_supported
+            voice_conv, state, sprite_animator, clock_sync, hourly_chime,
+            current_puzzle, puzzle_supported
         )
 
 
