@@ -132,6 +132,7 @@ def _ack_predicate_for(cmd: str) -> Callable[[str], bool]:
         "FACE": '"face"',
         "IMAGE": '"image"',
         "MOVE": '"yaw"',
+        "TIME": '"time"',
         "PUZZLE": '"puzzle"',
         "STACKLED": '"stack_led"',
         "HEADTOUCH_AVATAR": '"head_touch_avatar"',

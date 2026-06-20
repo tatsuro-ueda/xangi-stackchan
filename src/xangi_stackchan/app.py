@@ -59,6 +59,51 @@ STATUS_LIGHTS = (
 )
 
 
+def format_clock_command(hour: int, minute: int) -> str:
+    return f"TIME:{hour:02d}:{minute:02d}"
+
+
+class ClockSyncLoop:
+    def __init__(self, backend, now_fn=None, interval_seconds: float = 60.0):
+        self.backend = backend
+        self.now_fn = now_fn or time.localtime
+        self.interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="clock-sync", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+
+    def _time_parts(self) -> tuple[int, int]:
+        now = self.now_fn()
+        hour = getattr(now, "hour", getattr(now, "tm_hour", 0))
+        minute = getattr(now, "minute", getattr(now, "tm_min", 0))
+        return int(hour), int(minute)
+
+    def _send_once(self):
+        hour, minute = self._time_parts()
+        command = format_clock_command(hour, minute)
+        try:
+            result = self.backend.send_command(command)
+        except Exception as exc:
+            log({"clock": "send_error", "error": str(exc)})
+            return False
+        if isinstance(result, dict) and result.get("status") == "error":
+            log({"clock": "firmware_error", "result": result})
+            return False
+        log({"clock": command[5:], "result": result})
+        return True
+
+    def _run(self):
+        self._send_once()
+        while not self._stop.wait(self.interval_seconds):
+            self._send_once()
+
+
 def set_face_if_needed(backend, expression: str, current_face: list[str | None]):
     if not expression or current_face[0] == expression:
         return True
@@ -511,10 +556,16 @@ def close_runtime(
     voice_conv=None,
     state=None,
     sprite_animator=None,
+    clock_sync=None,
     current_puzzle=None,
     puzzle_supported=None,
 ):
     try:
+        if clock_sync is not None:
+            try:
+                clock_sync.stop()
+            except Exception:
+                pass
         if sprite_animator is not None:
             try:
                 sprite_animator.stop()
@@ -563,6 +614,7 @@ def run_bridge(state: RuntimeState):
     piper_process = None
     voice_conv = None
     sprite_animator = None
+    clock_sync = None
     current_face: list[str | None] = [None]
     current_move: list[float | None] = [None, None]
     current_puzzle: list[dict[str, str] | None] = [None]
@@ -577,9 +629,10 @@ def run_bridge(state: RuntimeState):
             if version != active_version:
                 close_runtime(
                     backend, piper_process, current_face, current_move, config,
-                    voice_conv, state, sprite_animator, current_puzzle, puzzle_supported
+                    voice_conv, state, sprite_animator, clock_sync, current_puzzle, puzzle_supported
                 )
                 sprite_animator = None
+                clock_sync = None
                 state.set_runtime(None, None)
                 backend = open_backend_with_retry(config)
                 piper_process = None
@@ -617,6 +670,8 @@ def run_bridge(state: RuntimeState):
                 set_puzzle_light_if_needed(
                     backend, config, config.puzzle_idle, current_puzzle, puzzle_supported
                 )
+                clock_sync = ClockSyncLoop(backend)
+                clock_sync.start()
                 if config.move_enabled:
                     set_move_if_needed(
                         backend, config.move_idle_yaw, config.move_idle_pitch, current_move
@@ -1036,7 +1091,7 @@ def run_bridge(state: RuntimeState):
         state.set_runtime(None, None)
         close_runtime(
             backend, piper_process, current_face, current_move, config,
-            voice_conv, state, sprite_animator, current_puzzle, puzzle_supported
+            voice_conv, state, sprite_animator, clock_sync, current_puzzle, puzzle_supported
         )
 
 
