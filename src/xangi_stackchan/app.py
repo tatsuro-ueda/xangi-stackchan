@@ -73,6 +73,37 @@ def format_hourly_chime_text(hour: int) -> str | None:
     return f"午後{hour - 12}時です"
 
 
+def select_time_face(hour: int, minute: int) -> str:
+    if 45 <= minute <= 49:
+        return "doubt"
+    if 50 <= minute <= 54:
+        return "sleepy"
+    if 55 <= minute <= 59:
+        return "happy"
+    if hour < 7:
+        return "sleepy"
+    if hour < 12:
+        return "neutral"
+    if hour == 12:
+        return "happy"
+    if hour < 17:
+        return "neutral"
+    if hour < 19:
+        return "sad"
+    if hour == 19:
+        return "sleepy"
+    if hour == 20:
+        return "angry"
+    return "sleepy"
+
+
+def get_current_time_face(now_fn=None) -> str:
+    now = (now_fn or time.localtime)()
+    hour = int(getattr(now, "hour", getattr(now, "tm_hour", 0)))
+    minute = int(getattr(now, "minute", getattr(now, "tm_min", 0)))
+    return select_time_face(hour, minute)
+
+
 class ClockSyncLoop:
     def __init__(self, backend, now_fn=None, interval_seconds: float = 60.0):
         self.backend = backend
@@ -446,6 +477,24 @@ def set_visual_face_if_needed(
         return False
 
 
+def set_idle_visual_face(
+    backend,
+    config: BridgeConfig,
+    current_face: list[str | None],
+    sprite_renderer: list[SpriteFaceRenderer | None],
+    sprite_animator: SpriteAnimationLoop | None = None,
+    now_fn=None,
+):
+    return set_visual_face_if_needed(
+        backend,
+        config,
+        get_current_time_face(now_fn),
+        current_face,
+        sprite_renderer,
+        sprite_animator,
+    )
+
+
 def set_move_if_needed(backend, yaw: float, pitch: float, current_move: list[float | None]):
     """Send MOVE:<yaw,pitch> only when target differs from last sent value.
 
@@ -762,8 +811,8 @@ def run_bridge(state: RuntimeState):
                         else "spritesheet not found",
                         "sprite_sheet": config.sprite_sheet,
                     })
-                set_visual_face_if_needed(
-                    backend, config, config.face_idle, current_face, sprite_renderer, sprite_animator
+                set_idle_visual_face(
+                    backend, config, current_face, sprite_renderer, sprite_animator
                 )
                 set_puzzle_light_if_needed(
                     backend, config, config.puzzle_idle, current_puzzle, puzzle_supported
@@ -836,8 +885,8 @@ def run_bridge(state: RuntimeState):
                         # ここで必ず戻し、listening 表示に固まらないようにする。
                         if sprite_animator is not None:
                             sprite_animator.resume()
-                        set_visual_face_if_needed(
-                            backend, config, config.face_idle, current_face, sprite_renderer, sprite_animator
+                        set_idle_visual_face(
+                            backend, config, current_face, sprite_renderer, sprite_animator
                         )
                         # デバッグ用 WAV 保存 (STACKCHAN_VC_SAVE_WAV=1 で有効化)。
                         # /tmp/voice_test_<ts>.wav に保存して aplay 等で実音確認できる。
@@ -858,8 +907,8 @@ def run_bridge(state: RuntimeState):
                         if not text.strip():
                             if sprite_animator is not None:
                                 sprite_animator.resume()
-                            set_visual_face_if_needed(
-                                backend, config, config.face_idle, current_face, sprite_renderer, sprite_animator
+                            set_idle_visual_face(
+                                backend, config, current_face, sprite_renderer, sprite_animator
                             )
 
                     voice_conv = VoiceConversation(
@@ -936,8 +985,8 @@ def run_bridge(state: RuntimeState):
                             set_puzzle_light_if_needed(
                                 backend, config, config.puzzle_idle, current_puzzle, puzzle_supported
                             )
-                            set_visual_face_if_needed(
-                                backend, config, config.face_idle, current_face,
+                            set_idle_visual_face(
+                                backend, config, current_face,
                                 sprite_renderer, sprite_animator,
                             )
                             if sprite_animator is not None:
@@ -1019,8 +1068,8 @@ def run_bridge(state: RuntimeState):
                             current_move[0] = None
                             current_move[1] = None
                             current_puzzle[0] = None
-                            set_visual_face_if_needed(
-                                backend, config, config.face_idle, current_face,
+                            set_idle_visual_face(
+                                backend, config, current_face,
                                 sprite_renderer, sprite_animator,
                             )
                             set_puzzle_light_if_needed(
@@ -1137,8 +1186,8 @@ def run_bridge(state: RuntimeState):
                                 speak_text(backend, event.get("text", ""), config, piper_process)
                                 if sprite_animator is not None:
                                     sprite_animator.resume()
-                            set_visual_face_if_needed(
-                                backend, config, config.face_idle, current_face, sprite_renderer, sprite_animator
+                            set_idle_visual_face(
+                                backend, config, current_face, sprite_renderer, sprite_animator
                             )
                             set_puzzle_light_if_needed(
                                 backend, config, config.puzzle_idle, current_puzzle, puzzle_supported
@@ -1152,8 +1201,8 @@ def run_bridge(state: RuntimeState):
                                 )
                         elif event_type == "turn.aborted":
                             active_turn = None
-                            set_visual_face_if_needed(
-                                backend, config, config.face_idle, current_face, sprite_renderer, sprite_animator
+                            set_idle_visual_face(
+                                backend, config, current_face, sprite_renderer, sprite_animator
                             )
                             set_puzzle_light_if_needed(
                                 backend, config, config.puzzle_idle, current_puzzle, puzzle_supported
