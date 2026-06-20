@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 karaage0703
+// SPDX-FileCopyrightText: 2026 tatsuro-ueda
 // SPDX-License-Identifier: MIT
 
 #include "clock_overlay.h"
