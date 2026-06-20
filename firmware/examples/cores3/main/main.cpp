@@ -56,6 +56,7 @@
 
 #include "SCServo.h"
 #include "Si12T.h"
+#include "clock_overlay.h"
 #include "nade_voices.h"
 
 using m5avatar::Avatar;
@@ -80,8 +81,6 @@ constexpr size_t   MAX_RECT_BYTES    = 320 * 240 * 2;  // host から送る RGB5
 // すればホストが諦める前に受信ループを抜けてコマンド待ちに復帰でき、自動再同期する。
 constexpr uint32_t IMAGE_CHUNK_TIMEOUT_MS = 1500;
 constexpr uint32_t BATTERY_UPDATE_MS = 5000;
-constexpr uint32_t CLOCK_STALE_MS = 90000;
-constexpr uint32_t CLOCK_DRAW_INTERVAL_MS = 250;
 constexpr int      PUZZLE_LED_PIN    = 9;   // CoreS3 Grove PORT.B yellow
 constexpr uint16_t PUZZLE_LED_COUNT  = 64;  // M5Stack Puzzle Unit WS2812E 8x8
 constexpr uint8_t  PUZZLE_BRIGHTNESS = 24;  // 64 LEDs: keep default current modest
@@ -168,11 +167,6 @@ static State g_state = State::Booting;
 // boot banner と STATUS の "reset_reason" で host から参照できる。再起動の瞬間の
 // シリアルログは USB 再列挙で host に届かないことが多いので、次回 boot に痕跡を残す。
 static esp_reset_reason_t g_reset_reason = ESP_RST_UNKNOWN;
-static char     g_clock_text[6] = "";
-static uint32_t g_clock_updated_ms = 0;
-static bool     g_clock_dirty = false;
-static bool     g_clock_last_visible = false;
-static uint32_t g_last_clock_draw_ms = 0;
 
 static const char* resetReasonStr(esp_reset_reason_t r) {
     switch (r) {
@@ -205,15 +199,6 @@ static const char* stateStr(State s) {
         case State::Error:     return "error";
     }
     return "unknown";
-}
-
-static bool clockVisibleAt(uint32_t now_ms) {
-    return g_clock_text[0] != '\0' && (now_ms - g_clock_updated_ms) <= CLOCK_STALE_MS;
-}
-
-static uint32_t clockAgeMs(uint32_t now_ms) {
-    if (g_clock_text[0] == '\0') return 0;
-    return now_ms - g_clock_updated_ms;
 }
 
 // === WAV キュー (stackchan-atama 方式) ================================
@@ -485,52 +470,22 @@ static void drawBatteryOverlay() {
     drawBatteryOverlayOn(M5.Display);
 }
 
-template <typename Gfx>
-static void clearClockOverlayOn(Gfx& gfx) {
-    constexpr int x = 6;
-    constexpr int y = 6;
-    constexpr int w = 72;
-    constexpr int h = 26;
-    gfx.fillRoundRect(x, y, w, h, 4, TFT_BLACK);
-}
-
-template <typename Gfx>
-static bool drawClockOverlayOn(Gfx& gfx) {
-    if (!clockVisibleAt(millis())) return false;
-
-    constexpr int x = 6;
-    constexpr int y = 6;
-    constexpr int w = 72;
-    constexpr int h = 26;
-
-    gfx.fillRoundRect(x, y, w, h, 4, TFT_BLACK);
-    gfx.drawRoundRect(x, y, w, h, 4, TFT_DARKGREY);
-    gfx.setTextColor(TFT_WHITE, TFT_BLACK);
-    gfx.setTextSize(2);
-    gfx.setTextDatum(top_left);
-    gfx.drawString(String(g_clock_text), x + 7, y + 5);
-    return true;
-}
-
 extern "C" void xangi_avatar_overlay(M5Canvas* sprite) {
     if (!sprite) return;
-    bool clock_visible = drawClockOverlayOn(*sprite);
-    g_clock_last_visible = clock_visible;
-    g_clock_dirty = false;
-    g_last_clock_draw_ms = millis();
+    uint32_t now_ms = millis();
+    bool clock_visible = clockOverlayDrawOn(*sprite, now_ms);
+    clockOverlayMarkDrawn(clock_visible, now_ms);
 }
 
 static void drawClockOverlay() {
     uint32_t now_ms = millis();
-    bool visible = clockVisibleAt(now_ms);
+    bool visible = clockOverlayVisibleAt(now_ms);
     if (visible) {
-        g_clock_last_visible = drawClockOverlayOn(M5.Display);
-    } else if (g_clock_last_visible) {
-        clearClockOverlayOn(M5.Display);
-        g_clock_last_visible = false;
+        clockOverlayMarkDrawn(clockOverlayDrawOn(M5.Display, now_ms), now_ms);
+    } else if (clockOverlayLastVisible()) {
+        clockOverlayClearOn(M5.Display);
+        clockOverlayMarkDrawn(false, now_ms);
     }
-    g_clock_dirty = false;
-    g_last_clock_draw_ms = now_ms;
 }
 
 static void ensureImageFaceCanvas() {
@@ -546,12 +501,11 @@ static void drawImageFace(bool force = false) {
     ensureImageFaceCanvas();
     g_image_face_canvas.fillScreen(TFT_BLACK);
     bool ok = g_image_face_canvas.drawJpg(g_image_face_jpeg, g_image_face_len, 0, 0, 320, 240, 0, 0);
-    bool clock_visible = drawClockOverlayOn(g_image_face_canvas);
+    uint32_t now_ms = millis();
+    bool clock_visible = clockOverlayDrawOn(g_image_face_canvas, now_ms);
     drawBatteryOverlayOn(g_image_face_canvas);
     g_image_face_canvas.pushSprite(0, 0);
-    g_clock_last_visible = clock_visible;
-    g_clock_dirty = false;
-    g_last_clock_draw_ms = millis();
+    clockOverlayMarkDrawn(clock_visible, now_ms);
     g_image_face_dirty = false;
     Serial.printf("[bridge] image face draw: %s size=%u\n",
                   ok ? "ok" : "failed", static_cast<unsigned>(g_image_face_len));
@@ -563,7 +517,7 @@ static void activateAvatarFace() {
         avatar.resume();
         avatar.setBatteryIcon(true);
         updateBatteryInfo(true);
-        g_clock_dirty = true;
+        clockOverlayMarkDirty();
     }
 }
 
@@ -607,8 +561,8 @@ static void sendAckUnsupported(const char* cmd) {
 static void handleStatus() {
     updateBatteryInfo(true);
     uint32_t now_ms = millis();
-    bool clock_visible = clockVisibleAt(now_ms);
-    uint32_t clock_age_ms = clockAgeMs(now_ms);
+    bool clock_visible = clockOverlayVisibleAt(now_ms);
+    uint32_t clock_age_ms = clockOverlayAgeMs(now_ms);
     Serial.printf("{\"state\":\"%s\",\"volume\":%u,\"version\":\"cores3-main-0.21\","
                   "\"servo\":%s,\"torque\":%s,\"camera\":%s,\"head_touch\":%s,"
                   "\"puzzle\":%s,\"puzzle_pattern\":\"%s\","
@@ -638,7 +592,7 @@ static void handleStatus() {
                   g_battery_voltage_mv,
                   g_battery_charging == m5::Power_Class::is_charging ? "charging" :
                     (g_battery_charging == m5::Power_Class::is_discharging ? "discharging" : "unknown"),
-                  g_clock_text,
+                  clockOverlayText(),
                   clock_visible ? "true" : "false",
                   static_cast<unsigned long>(clock_age_ms),
                   resetReasonStr(g_reset_reason),
@@ -669,16 +623,13 @@ static void handleTime(const char* arg) {
         return;
     }
 
-    memcpy(g_clock_text, arg, 5);
-    g_clock_text[5] = '\0';
-    g_clock_updated_ms = millis();
-    g_clock_dirty = true;
+    clockOverlaySetTime(arg, millis());
     if (g_image_face_active) {
         g_image_face_dirty = true;
     }
 
     char extra[32];
-    snprintf(extra, sizeof(extra), "\"time\":\"%s\"", g_clock_text);
+    snprintf(extra, sizeof(extra), "\"time\":\"%s\"", clockOverlayText());
     sendAckOk(extra);
 }
 
@@ -1901,19 +1852,17 @@ void loop() {
     recoverFromMicWatchdog();
     updateBatteryInfo();
     uint32_t now_ms = millis();
-    bool clock_visible_now = clockVisibleAt(now_ms);
+    bool clock_visible_now = clockOverlayVisibleAt(now_ms);
     if (g_image_face_active) {
-        if (g_clock_dirty || clock_visible_now != g_clock_last_visible) {
+        if (clockOverlayDirty() || clock_visible_now != clockOverlayLastVisible()) {
             g_image_face_dirty = true;
         }
     } else {
         // Avatar mode draws the clock inside M5Stack-Avatar's own sprite hook.
         // Drawing directly on M5.Display races with Avatar's draw task and can
         // panic in the SPI transaction mutex.
-        if (g_clock_dirty || clock_visible_now != g_clock_last_visible) {
-            g_clock_last_visible = clock_visible_now;
-            g_clock_dirty = false;
-            g_last_clock_draw_ms = now_ms;
+        if (clockOverlayDirty() || clock_visible_now != clockOverlayLastVisible()) {
+            clockOverlayMarkDrawn(clock_visible_now, now_ms);
         }
     }
     if (g_image_face_active && millis() - g_last_battery_update_ms < 5) {
