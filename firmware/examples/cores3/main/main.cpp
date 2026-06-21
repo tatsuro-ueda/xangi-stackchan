@@ -101,6 +101,11 @@ constexpr size_t   MIC_CHUNK_SAMPLES  = 1024;        // 64ms @ 16kHz
 constexpr size_t   MIC_CHUNK_BYTES    = MIC_CHUNK_SAMPLES * sizeof(int16_t);
 constexpr uint8_t  MIC_MAGNIFICATION  = 1;           // voice比較用: CoreS3既定2より下げる
 constexpr uint8_t  MIC_OVER_SAMPLING  = 1;
+constexpr uint8_t  ES7210_I2C_ADDR     = 0x40;
+constexpr uint32_t ES7210_I2C_FREQ     = 400000;
+constexpr uint8_t  ES7210_REG_MIC1_GAIN = 0x43;
+constexpr uint8_t  ES7210_REG_MIC2_GAIN = 0x44;
+constexpr uint8_t  ES7210_MIC_GAIN_SETTING = 0x17;   // MIC select + 21dB相当。M5Unified既定0x1Bより12dB下げる
 constexpr uint32_t MIC_STOP_WAIT_MS   = 200;         // 録音タスク終了待ち
 // 録音開始からの最大経過時間 (ms)。host が SIGKILL 等で死んで MIC_STOP を送れな
 // かった場合の保険。これを超えたら自動で MIC モードを抜けて Speaker 復帰する。
@@ -1504,6 +1509,15 @@ static void configureMicForVoiceInput() {
     M5.Mic.config(cfg);
 }
 
+static bool configureEs7210MicGainForVoiceInput() {
+    bool ok = true;
+    ok &= M5.In_I2C.writeRegister8(ES7210_I2C_ADDR, ES7210_REG_MIC1_GAIN,
+                                   ES7210_MIC_GAIN_SETTING, ES7210_I2C_FREQ);
+    ok &= M5.In_I2C.writeRegister8(ES7210_I2C_ADDR, ES7210_REG_MIC2_GAIN,
+                                   ES7210_MIC_GAIN_SETTING, ES7210_I2C_FREQ);
+    return ok;
+}
+
 static void handleMicStart() {
     if (g_mic_recording) {
         sendAckError("already recording");
@@ -1521,6 +1535,10 @@ static void handleMicStart() {
         sendAckError("mic begin failed");
         return;
     }
+    const bool es7210_gain_ok = configureEs7210MicGainForVoiceInput();
+    if (!es7210_gain_ok) {
+        Serial.println("[bridge] ES7210 mic gain override failed");
+    }
     g_mic_recording = true;
     g_mic_start_ms = millis();  // watchdog の起点
     xTaskCreatePinnedToCore(micRecordTask, "micRec", 4096, nullptr, 3, &g_mic_task,
@@ -1531,11 +1549,14 @@ static void handleMicStart() {
     }
     Serial.printf("{\"status\":\"ok\",\"mode\":\"recording\",\"sample_rate\":%u,"
                   "\"bits\":16,\"channels\":1,\"chunk_bytes\":%u,"
-                  "\"mic_magnification\":%u,\"mic_over_sampling\":%u}\n",
+                  "\"mic_magnification\":%u,\"mic_over_sampling\":%u,"
+                  "\"es7210_mic_gain\":%u,\"es7210_gain_ok\":%s}\n",
                   static_cast<unsigned>(MIC_SAMPLE_RATE),
                   static_cast<unsigned>(MIC_CHUNK_BYTES),
                   static_cast<unsigned>(MIC_MAGNIFICATION),
-                  static_cast<unsigned>(MIC_OVER_SAMPLING));
+                  static_cast<unsigned>(MIC_OVER_SAMPLING),
+                  static_cast<unsigned>(ES7210_MIC_GAIN_SETTING),
+                  es7210_gain_ok ? "true" : "false");
     Serial.flush();
 }
 
