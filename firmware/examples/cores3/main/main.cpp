@@ -99,6 +99,8 @@ constexpr uint8_t  STACK_LED_COUNT   = 12;  // K151 / K151-R body RGB LEDs (left
 constexpr uint32_t MIC_SAMPLE_RATE    = 16000;
 constexpr size_t   MIC_CHUNK_SAMPLES  = 1024;        // 64ms @ 16kHz
 constexpr size_t   MIC_CHUNK_BYTES    = MIC_CHUNK_SAMPLES * sizeof(int16_t);
+constexpr uint8_t  MIC_MAGNIFICATION  = 1;           // voice比較用: CoreS3既定2より下げる
+constexpr uint8_t  MIC_OVER_SAMPLING  = 1;
 constexpr uint32_t MIC_STOP_WAIT_MS   = 200;         // 録音タスク終了待ち
 // 録音開始からの最大経過時間 (ms)。host が SIGKILL 等で死んで MIC_STOP を送れな
 // かった場合の保険。これを超えたら自動で MIC モードを抜けて Speaker 復帰する。
@@ -1494,6 +1496,14 @@ static void micRecordTask(void* /*param*/) {
     vTaskDelete(nullptr);
 }
 
+static void configureMicForVoiceInput() {
+    auto cfg = M5.Mic.config();
+    cfg.sample_rate = MIC_SAMPLE_RATE;
+    cfg.magnification = MIC_MAGNIFICATION;
+    cfg.over_sampling = MIC_OVER_SAMPLING;
+    M5.Mic.config(cfg);
+}
+
 static void handleMicStart() {
     if (g_mic_recording) {
         sendAckError("already recording");
@@ -1502,6 +1512,7 @@ static void handleMicStart() {
     // Speaker と Mic は I2S を共有するので、Speaker.end() → Mic.begin() の順で
     // 切り替える。Speaker が止まると WAV 再生不可になるが、録音中はその想定。
     M5.Speaker.end();
+    configureMicForVoiceInput();
     if (!M5.Mic.begin()) {
         Serial.println("[bridge] Mic.begin() failed");
         // 失敗時は Speaker を戻して error 応答
@@ -1519,9 +1530,12 @@ static void handleMicStart() {
         avatar.setSpeechText("listening...");
     }
     Serial.printf("{\"status\":\"ok\",\"mode\":\"recording\",\"sample_rate\":%u,"
-                  "\"bits\":16,\"channels\":1,\"chunk_bytes\":%u}\n",
+                  "\"bits\":16,\"channels\":1,\"chunk_bytes\":%u,"
+                  "\"mic_magnification\":%u,\"mic_over_sampling\":%u}\n",
                   static_cast<unsigned>(MIC_SAMPLE_RATE),
-                  static_cast<unsigned>(MIC_CHUNK_BYTES));
+                  static_cast<unsigned>(MIC_CHUNK_BYTES),
+                  static_cast<unsigned>(MIC_MAGNIFICATION),
+                  static_cast<unsigned>(MIC_OVER_SAMPLING));
     Serial.flush();
 }
 
