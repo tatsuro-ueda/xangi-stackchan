@@ -155,6 +155,19 @@ def test_merge_config_accepts_sprite_face_options():
     assert config.sprite_jpeg_quality == 95
 
 
+def test_merge_config_accepts_voice_input_source_options():
+    config = merge_config(
+        _base_config(),
+        {
+            "voice_input_source": "mac",
+            "mac_mic_seconds": "6.5",
+        },
+    )
+
+    assert config.voice_input_source == "mac"
+    assert config.mac_mic_seconds == 6.5
+
+
 def test_cli_defaults_enable_lcd_mic_and_head_pet_reaction():
     from xangi_stackchan.app import build_parser, config_from_args
 
@@ -168,6 +181,21 @@ def test_cli_defaults_enable_lcd_mic_and_head_pet_reaction():
     assert config.puzzle_thinking == "thinking"
     assert config.puzzle_talking == "talking"
     assert config.puzzle_error == "error"
+    assert config.voice_input_source == "stackchan"
+    assert config.mac_mic_seconds == 7.0
+
+
+def test_cli_accepts_mac_voice_input_source():
+    from xangi_stackchan.app import build_parser, config_from_args
+
+    config = config_from_args(
+        build_parser().parse_args(
+            ["--voice-input-source", "mac", "--mac-mic-seconds", "5.5"]
+        )
+    )
+
+    assert config.voice_input_source == "mac"
+    assert config.mac_mic_seconds == 5.5
 
 
 def test_cli_can_disable_lcd_mic_and_head_pet_reaction():

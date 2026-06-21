@@ -895,7 +895,11 @@ def run_bridge(state: RuntimeState):
                             ],
                         })
                     def _vc_on_press(event):
-                        log({"voice_press": event.get("gesture"), "at": event.get("at")})
+                        log({
+                            "voice_press": event.get("gesture") or event.get("action"),
+                            "at": event.get("at"),
+                            "input_source": config.voice_input_source,
+                        })
                         if sprite_animator is not None:
                             sprite_animator.pause()
                         set_visual_face_if_needed(
@@ -905,7 +909,8 @@ def run_bridge(state: RuntimeState):
                     def _vc_on_stop(stop_result):
                         log({"voice_stop": True,
                              "duration": stop_result.get("duration_seconds"),
-                             "frames": stop_result.get("frames")})
+                             "frames": stop_result.get("frames"),
+                             "input_source": stop_result.get("input_source")})
                         # STT に進まない短すぎる録音 / MIC_START 失敗 / USB 切断復帰では
                         # on_transcribed が呼ばれない。press 時に pause した sprite を
                         # ここで必ず戻し、listening 表示に固まらないようにする。
@@ -945,6 +950,8 @@ def run_bridge(state: RuntimeState):
                         silence_seconds=config.voice_silence_seconds,
                         max_record_seconds=config.voice_max_seconds,
                         initial_grace_seconds=config.voice_initial_grace_seconds,
+                        input_source=config.voice_input_source,
+                        mac_mic_seconds=config.mac_mic_seconds,
                         on_press=_vc_on_press,
                         on_stop=_vc_on_stop,
                         on_transcribed=_vc_on_transcribed,
@@ -963,6 +970,7 @@ def run_bridge(state: RuntimeState):
                         "trigger_head_touch": config.voice_conversation,
                         "trigger_mic_button": True,
                         "mode": "voice_conversation" if config.voice_conversation else "lcd_mic_voice",
+                        "input_source": config.voice_input_source,
                     })
                 state.set_voice_conversation(voice_conv)
 
@@ -1406,6 +1414,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="最大録音時間 (既定 15)。これを超えたら強制停止。",
     )
     parser.add_argument(
+        "--voice-input-source",
+        choices=["stackchan", "mac"],
+        default=os.environ.get("STACKCHAN_VC_INPUT_SOURCE", "stackchan"),
+        help="音声入力元。stackchan は実機 MIC_START/MIC_PCM、mac はMac既定マイク録音。",
+    )
+    parser.add_argument(
+        "--mac-mic-seconds",
+        type=float,
+        default=float(os.environ.get("STACKCHAN_MAC_MIC_SECONDS", "7.0")),
+        help="--voice-input-source mac の固定録音秒数 (既定 7)。",
+    )
+    parser.add_argument(
         "--voice-initial-grace-seconds",
         type=float,
         default=5.0,
@@ -1528,6 +1548,8 @@ def config_from_args(args: argparse.Namespace) -> BridgeConfig:
         voice_silence_dbfs=args.voice_silence_dbfs,
         voice_silence_seconds=args.voice_silence_seconds,
         voice_max_seconds=args.voice_max_seconds,
+        voice_input_source=args.voice_input_source,
+        mac_mic_seconds=args.mac_mic_seconds,
         voice_initial_grace_seconds=args.voice_initial_grace_seconds,
         lcd_mic_voice=args.lcd_mic_voice,
         speak_platforms=[

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 import requests
 
+from . import mac_mic
 from . import stt as stt_module
 from .stackchan import StackchanSerial
 
@@ -48,6 +49,8 @@ HISTORY_MAX             = int(os.environ.get("STACKCHAN_VC_HISTORY_MAX", "10"))
 # stream が死ぬと chunk-based 停止が一切走らず録音状態に固まる。これを壁時計
 # watchdog で救う安全網。連続なで / 発話直後なで でも固まらなくなる (2026-05-30)。
 DEFAULT_PCM_STALL_SECONDS = float(os.environ.get("STACKCHAN_VC_PCM_STALL_SECONDS", "3.0"))
+DEFAULT_INPUT_SOURCE = os.environ.get("STACKCHAN_VC_INPUT_SOURCE", "stackchan").strip().lower()
+DEFAULT_MAC_MIC_SECONDS = float(os.environ.get("STACKCHAN_MAC_MIC_SECONDS", "7.0"))
 # watchdog thread のポーリング間隔 (秒)。
 WATCHDOG_POLL_SECONDS = 0.25
 
@@ -97,6 +100,8 @@ class VoiceConversation:
         on_press: callable = None,
         trigger_head_touch: bool = True,
         trigger_mic_button: bool = True,
+        input_source: str = DEFAULT_INPUT_SOURCE,
+        mac_mic_seconds: float = DEFAULT_MAC_MIC_SECONDS,
     ):
         self.backend = backend
         # 録音トリガの選択。アタマセンサ press / LCD マイクボタン tap のどちらで録音を
@@ -104,6 +109,8 @@ class VoiceConversation:
         # trigger_head_touch=False にする。
         self.trigger_head_touch = trigger_head_touch
         self.trigger_mic_button = trigger_mic_button
+        self.input_source = self._normalize_input_source(input_source)
+        self.mac_mic_seconds = float(mac_mic_seconds)
         self.xangi_base_url = xangi_base_url.rstrip("/")
         self.app_session_id = app_session_id
         self.silence_dbfs = silence_dbfs
@@ -147,6 +154,13 @@ class VoiceConversation:
         # signal handler 登録時に保存する前ハンドラ (使わないが将来 chain したい時用)。
         self._prev_sigterm = None
 
+    @staticmethod
+    def _normalize_input_source(value: str) -> str:
+        value = str(value or "stackchan").strip().lower()
+        if value not in {"stackchan", "mac"}:
+            return "stackchan"
+        return value
+
     def start(self) -> None:
         """backend.on_head_touch に bind。録音 stream の callback 経路も
         backend.start_mic_recording 内で on_pcm_chunk として渡す。
@@ -182,7 +196,8 @@ class VoiceConversation:
         self.backend.on_mic_button = None
         self._watchdog_stop.set()  # watchdog thread を畳む
         if self._recording:
-            self._schedule_stop()
+            if self.input_source != "mac":
+                self._schedule_stop()
             if self._stop_thread is not None:
                 self._stop_thread.join(timeout=3.0)
 
@@ -200,7 +215,7 @@ class VoiceConversation:
         Speaker モードに復帰させる。例外は飲み込む (atexit で raise すると別の
         cleanup ハンドラに影響する)。"""
         try:
-            if self._recording:
+            if self._recording and self.input_source != "mac":
                 # backend.stop_mic_recording は reader thread join + ack 待ち含むので
                 # 数百 ms ブロックする可能性あり、それでも安全側でやりきる。
                 self.backend.stop_mic_recording()
@@ -229,6 +244,10 @@ class VoiceConversation:
     def _toggle_recording(self, event: dict) -> None:
         with self._state_lock:
             if self._recording:
+                if self.input_source == "mac":
+                    # Mac 録音は固定秒数のローカル recorder なので、録音中の再タップは
+                    # stop ではなく無視する。途中停止は後続 UX 改善で扱う。
+                    return
                 # 録音中の再トリガ = toggle stop
                 self._schedule_stop()
                 return
@@ -255,6 +274,15 @@ class VoiceConversation:
                 pass
 
         # ack 取得 + 録音開始。失敗時は state を戻す。
+        if self.input_source == "mac":
+            self._stop_thread = threading.Thread(
+                target=self._record_mac_and_process,
+                daemon=True,
+                name="stackchan-vc-mac-record",
+            )
+            self._stop_thread.start()
+            return
+
         ack = self.backend.start_mic_recording(on_pcm_chunk=self._on_pcm_chunk)
         if ack.get("status") != "ok":
             with self._state_lock:
@@ -263,6 +291,7 @@ class VoiceConversation:
                 try:
                     self.on_stop({
                         **ack,
+                        "input_source": self.input_source,
                         "pcm": b"",
                         "wav": b"",
                         "frames": 0,
@@ -273,6 +302,24 @@ class VoiceConversation:
             return
         # PCM が来なくても max / stall で必ず stop する安全網を起動。
         self._start_watchdog()
+
+    def _record_mac_and_process(self) -> None:
+        try:
+            result = mac_mic.record_mac_microphone(seconds=self.mac_mic_seconds)
+        except Exception as exc:
+            result = {
+                "status": "error",
+                "input_source": "mac",
+                "error": str(exc),
+                "pcm": b"",
+                "wav": b"",
+                "frames": 0,
+                "duration_seconds": 0.0,
+            }
+        finally:
+            with self._state_lock:
+                self._recording = False
+        self._process_recording_result(result)
 
     def _on_pcm_chunk(self, chunk: bytes) -> None:
         """各 PCM chunk の RMS で無音判定 → 無音 N 秒で自動 stop。"""
@@ -362,6 +409,11 @@ class VoiceConversation:
         finally:
             with self._state_lock:
                 self._recording = False
+        if isinstance(result, dict):
+            result.setdefault("input_source", self.input_source)
+        self._process_recording_result(result)
+
+    def _process_recording_result(self, result: dict) -> None:
         if self.on_stop is not None:
             try:
                 self.on_stop(result)
@@ -392,6 +444,7 @@ class VoiceConversation:
             "stt_status": r.get("status"),
             "duration_seconds": result.get("duration_seconds"),
             "frames": result.get("frames"),
+            "input_source": result.get("input_source", self.input_source),
             "sent_status": None,
         }
         self.history.append(entry)

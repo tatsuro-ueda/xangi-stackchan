@@ -60,6 +60,10 @@ class BridgeConfig:
     voice_silence_dbfs: float = -40.0
     voice_silence_seconds: float = 1.5
     voice_max_seconds: float = 15.0
+    # 音声入力元。stackchan は従来通り実機 MIC_START / MIC_PCM を使う。
+    # mac はStackChanをトリガーだけにし、Macの既定入力デバイスで固定秒数録音する。
+    voice_input_source: str = "stackchan"
+    mac_mic_seconds: float = 7.0
     # なでてから最初の発話までの猶予 (秒)。この間の無音では録音を止めない (考える
     # 時間)。最初の有音で通常 voice_silence_seconds 判定に切替。猶予内に一度も発話が
     # 無ければ誤タップとして stop。

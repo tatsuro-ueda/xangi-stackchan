@@ -130,6 +130,8 @@ def config_to_dict(config: BridgeConfig) -> dict[str, Any]:
         "voice_silence_dbfs": config.voice_silence_dbfs,
         "voice_silence_seconds": config.voice_silence_seconds,
         "voice_max_seconds": config.voice_max_seconds,
+        "voice_input_source": config.voice_input_source,
+        "mac_mic_seconds": config.mac_mic_seconds,
         "voice_initial_grace_seconds": config.voice_initial_grace_seconds,
         "lcd_mic_voice": config.lcd_mic_voice,
         "speak_platforms": list(config.speak_platforms),
@@ -253,6 +255,12 @@ def merge_config(base: BridgeConfig, data: dict[str, Any]) -> BridgeConfig:
         ),
         voice_max_seconds=_float_or(
             data.get("voice_max_seconds"), base.voice_max_seconds
+        ),
+        voice_input_source=str(
+            data.get("voice_input_source", base.voice_input_source)
+        ),
+        mac_mic_seconds=_float_or(
+            data.get("mac_mic_seconds"), base.mac_mic_seconds
         ),
         voice_initial_grace_seconds=_float_or(
             data.get("voice_initial_grace_seconds"), base.voice_initial_grace_seconds

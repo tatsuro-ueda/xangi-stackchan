@@ -126,6 +126,8 @@ def render_page(state: RuntimeState) -> str:
       {_field("voice_silence_dbfs", "silence threshold (dBFS、静か:-50 / 騒:-30)", cfg["voice_silence_dbfs"], "number")}
       {_field("voice_silence_seconds", "silence seconds (自動停止までの無音秒数)", cfg["voice_silence_seconds"], "number")}
       {_field("voice_max_seconds", "max record seconds (強制停止)", cfg["voice_max_seconds"], "number")}
+      {_select("voice_input_source", "input source", cfg["voice_input_source"], ["stackchan", "mac"])}
+      {_field("mac_mic_seconds", "Mac mic seconds (input source=mac)", cfg["mac_mic_seconds"], "number")}
       <div style="margin-top:12px;">
         <strong>直近の発話履歴 (上から新しい順、5 秒ごと自動更新):</strong>
         <pre id="vc-history" style="background:#eee4d2; padding:8px; border-radius:8px; max-height:240px; overflow-y:auto; white-space:pre-wrap; margin-top:6px;">(まだ録音なし)</pre>
