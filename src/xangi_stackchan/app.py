@@ -15,6 +15,7 @@ from queue import Queue
 import requests
 
 from .app_types import BridgeConfig
+from .auth import build_xangi_basic_auth
 from .events import iter_xangi_events, normalize_xangi_stream_url
 from .settings import (
     DEFAULT_CONFIG_PATH,
@@ -1583,6 +1584,7 @@ def _ensure_voice_session(args: argparse.Namespace) -> None:
         r = requests.post(
             f"{args.xangi_url.rstrip('/')}/api/sessions",
             json={},
+            auth=build_xangi_basic_auth(),
             timeout=10,
         )
         if not r.ok:

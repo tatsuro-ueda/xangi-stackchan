@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from .auth import build_xangi_basic_auth
+
 
 def normalize_xangi_stream_url(url: str) -> str:
     """Accept either a xangi base URL or a full /api/events/stream URL."""
@@ -25,6 +27,7 @@ def iter_sse_messages(url: str, timeout: int = 65) -> Iterator[dict[str, str]]:
         url,
         stream=True,
         headers={"Accept": "text/event-stream"},
+        auth=build_xangi_basic_auth(),
         timeout=(5, timeout),
     ) as resp:
         resp.raise_for_status()
@@ -82,4 +85,3 @@ def reconnecting_xangi_events(
             }
             time.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
-

@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 
 import requests
 
+from .auth import build_xangi_basic_auth
+
 from . import mac_mic
 from . import stt as stt_module
 from .stackchan import StackchanSerial
@@ -466,6 +468,7 @@ class VoiceConversation:
                 response = requests.post(
                     f"{self.xangi_base_url}/api/chat",
                     json=payload,
+                    auth=build_xangi_basic_auth(),
                     timeout=120,
                     stream=True,
                 )
