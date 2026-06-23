@@ -170,6 +170,11 @@ static int16_t       g_mic_buffer[MIC_CHUNK_SAMPLES];
 
 enum class State { Booting, Ready, Receiving, Playing, Error };
 static State g_state = State::Booting;
+static char g_ready_text[96] = "ready";
+
+// TEXT: の吹き出しを1行に省略するときの最大表示文字数 (日本語1文字=1カウント)。
+// 12px(実効24px)で実機目視確認した結果、6文字が読みやすく画面幅に収まる。
+static constexpr size_t SPEECH_MAX_CHARS = 6;
 
 // 直前のリセット理由。予期しない再起動 (panic / watchdog / brownout) の事後診断用。
 // boot banner と STATUS の "reset_reason" で host から参照できる。再起動の瞬間の
@@ -427,7 +432,7 @@ static void avatarSay(const char* msg) {
 static void setState(State s) {
     g_state = s;
     if (!g_image_face_active) {
-        avatarSay(stateStr(s));
+        avatarSay(s == State::Ready ? g_ready_text : stateStr(s));
     }
     Serial.printf("[bridge] state=%s\n", stateStr(s));
 }
@@ -638,6 +643,87 @@ static void handleTime(const char* arg) {
 
     char extra[32];
     snprintf(extra, sizeof(extra), "\"time\":\"%s\"", clockOverlayText());
+    sendAckOk(extra);
+}
+
+// === 日本語 speech text 整形 =================================================
+// UTF-8 の先頭 maxChars 文字ぶんを dst へコピーする (日本語1文字=複数バイト対応)。
+// dst には末尾 '\0' を必ず書く。残りがあれば (= 切り詰めた) true を返す。
+static bool copyFirstUtf8Chars(char* dst, size_t dstSize, const char* src, size_t maxChars) {
+    if (dstSize == 0) return false;
+    size_t di = 0;
+    size_t chars = 0;
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(src);
+    while (*p && chars < maxChars) {
+        size_t clen = 1;
+        if ((*p & 0x80) == 0x00)      clen = 1;
+        else if ((*p & 0xE0) == 0xC0) clen = 2;
+        else if ((*p & 0xF0) == 0xE0) clen = 3;
+        else if ((*p & 0xF8) == 0xF0) clen = 4;
+        // 末尾 '\0' 用に1バイト残す。入り切らなければ打ち切り。
+        if (di + clen + 1 > dstSize) break;
+        bool broken = false;
+        for (size_t k = 0; k < clen; k++) {
+            if (!p[k]) { broken = true; break; }  // 途中で切れた不正 UTF-8
+            dst[di++] = static_cast<char>(p[k]);
+        }
+        if (broken) break;
+        p += clen;
+        chars++;
+    }
+    dst[di] = '\0';
+    return (*p != '\0');
+}
+
+// line1 と line2 を半角スペースで結合し、先頭 SPEECH_MAX_CHARS 文字に省略して
+// 1行の speech text を作る。切り詰めた場合は末尾に "…" を付ける。
+static void formatSpeechOneLine(char* dst, size_t dstSize, const char* line1, const char* line2) {
+    char combined[96] = {};
+    if (line2 && line2[0] != '\0') {
+        snprintf(combined, sizeof(combined), "%s %s", line1 ? line1 : "", line2);
+    } else {
+        snprintf(combined, sizeof(combined), "%s", line1 ? line1 : "");
+    }
+    static const char* kEllipsis = "…";          // U+2026, UTF-8 3バイト
+    size_t reserve = strlen(kEllipsis) + 1;       // "…" + '\0' のぶんを残す
+    size_t copySize = (dstSize > reserve) ? (dstSize - reserve + 1) : dstSize;
+    bool truncated = copyFirstUtf8Chars(dst, copySize, combined, SPEECH_MAX_CHARS);
+    if (truncated) {
+        strncat(dst, kEllipsis, dstSize - strlen(dst) - 1);
+    }
+}
+
+// TEXT:<line1>[|line2]\n
+static void handleText(const char* arg) {
+    if (!arg || strlen(arg) == 0) {
+        sendAckError("TEXT syntax: line1[|line2]");
+        return;
+    }
+
+    char line1[32] = {};
+    char line2[48] = {};
+    const char* sep = strchr(arg, '|');
+    if (sep) {
+        size_t line1_len = min(static_cast<size_t>(sep - arg), sizeof(line1) - 1);
+        strncpy(line1, arg, line1_len);
+        line1[line1_len] = '\0';
+        strncpy(line2, sep + 1, sizeof(line2) - 1);
+        line2[sizeof(line2) - 1] = '\0';
+    } else {
+        strncpy(line1, arg, sizeof(line1) - 1);
+        line1[sizeof(line1) - 1] = '\0';
+    }
+
+    // line1 と line2 を結合し、先頭 SPEECH_MAX_CHARS 文字の1行に省略する。
+    // 日本語フォント (setup の setSpeechFont) で吹き出しに1行表示される。
+    formatSpeechOneLine(g_ready_text, sizeof(g_ready_text), line1, line2);
+
+    if (!g_image_face_active && g_state == State::Ready) {
+        avatarSay(g_ready_text);
+    }
+
+    char extra[48];
+    snprintf(extra, sizeof(extra), "\"text\":\"%s\"", line1);
     sendAckOk(extra);
 }
 
@@ -1711,6 +1797,9 @@ static void pollSerialCommand() {
             else if (strncmp(g_line, "TIME:", 5) == 0) {
                 handleTime(g_line + 5);
             }
+            else if (strncmp(g_line, "TEXT:", 5) == 0) {
+                handleText(g_line + 5);
+            }
             else if (strncmp(g_line, "PUZZLE:", 7) == 0) {
                 handlePuzzle(g_line + 7);
             }
@@ -1794,6 +1883,11 @@ void setup() {
     // Avatar 初期化。`init()` で内部スプライトを確保し、表情/口パク用の draw
     // task を起動する。M5.begin() の後で呼ぶ必要あり。
     avatar.init();
+    // 吹き出しを日本語対応フォントにする。これがないと TEXT: の日本語が
+    // 文字化け/豆腐になる。ASCII (ready / listening... 等) もこのフォントで描ける。
+    // Balloon は setTextSize(2) で2倍描画するため、12px = 実効24px。全角6文字なら
+    // textWidth ≒ 144px で CoreS3 の 320px 幅に余裕で収まる。8px は小さすぎたため 12px に。
+    avatar.setSpeechFont(&fonts::lgfxJapanGothicP_12);
     avatar.setBatteryIcon(true);
     updateBatteryInfo(true);
     avatar.setExpression(Expression::Neutral);
