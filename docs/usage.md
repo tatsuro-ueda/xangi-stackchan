@@ -447,6 +447,21 @@ uv run python scripts/dance_demo.py --text "踊るよ" --preset happy \
 `--via-bridge` を指定すると `POST /api/demo` で動作中の xangi-stackchan にお願いする
 モードになる。USB シリアルは xangi-stackchan が掴んだまま、内部でダンスする。
 
+### companion から表示を更新する
+
+xangi-stackchan が USB serial を掴んでいる状態で、別プロセスから時計や短いテキストを
+出したい場合は `POST /api/command` を使う。外部から受け付ける command は
+`TEXT:` と `TIME:` だけ。
+
+```bash
+curl -s http://127.0.0.1:7897/api/command \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"TEXT:P7|MTG"}'
+```
+
+これにより companion は serial port を直接開かず、動作中の xangi-stackchan 経由で
+表示だけを更新できる。
+
 #### C. CLI 直接モード (xangi-stackchan 停止時のスタンドアロン)
 
 ```bash

@@ -5,7 +5,7 @@ from threading import Lock
 from typing import Any
 
 from .app_types import BridgeConfig
-from .stackchan import StackchanConfig
+from .stackchan import StackchanConfig, normalize_serial_port
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".xangi" / "xangi-stackchan" / "config.json"
@@ -185,7 +185,7 @@ def merge_config(base: BridgeConfig, data: dict[str, Any]) -> BridgeConfig:
         wifi=_bool(data.get("wifi", base.stackchan.wifi)),
         simulator=_bool(data.get("simulator", base.stackchan.simulator)),
         host=str(data.get("host", base.stackchan.host)),
-        port=str(data.get("port", base.stackchan.port)),
+        port=normalize_serial_port(data.get("port", base.stackchan.port)),
         baud=_int_or(data.get("baud"), base.stackchan.baud),
         device_profile=str(data.get("device_profile", base.stackchan.device_profile)),
         max_wav_bytes=_int_or(data.get("max_wav_bytes"), base.stackchan.max_wav_bytes),

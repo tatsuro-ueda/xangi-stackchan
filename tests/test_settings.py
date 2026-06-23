@@ -170,6 +170,14 @@ def test_cli_defaults_enable_lcd_mic_and_head_pet_reaction():
     assert config.puzzle_error == "error"
 
 
+def test_cli_treats_port_auto_as_auto_detect():
+    from xangi_stackchan.app import build_parser, config_from_args
+
+    config = config_from_args(build_parser().parse_args(["--port", "auto"]))
+
+    assert config.stackchan.port == ""
+
+
 def test_cli_can_disable_lcd_mic_and_head_pet_reaction():
     from xangi_stackchan.app import build_parser, config_from_args
 
@@ -179,6 +187,12 @@ def test_cli_can_disable_lcd_mic_and_head_pet_reaction():
 
     assert config.lcd_mic_voice is False
     assert config.head_pet_reaction is False
+
+
+def test_merge_config_treats_port_auto_as_auto_detect():
+    config = merge_config(_base_config(), {"port": "auto"})
+
+    assert config.stackchan.port == ""
 
 
 def test_voice_thread_alignment_only_in_voice_mode():

@@ -7,8 +7,11 @@ camera plumbing is exercised manually with a real device, not here.
 from __future__ import annotations
 
 import socket
+import json
 from contextlib import closing
 from pathlib import Path
+from urllib import request
+from urllib.error import HTTPError
 
 import pytest
 
@@ -53,6 +56,30 @@ def _pick_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+class CommandBackend:
+    def __init__(self):
+        self.commands = []
+
+    def send_command(self, command):
+        self.commands.append(command)
+        return {"status": "ok", "command": command}
+
+
+def _post_json(port: int, path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=2) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
 class FakeBackend:
@@ -133,6 +160,44 @@ def test_binds_initial_port_when_free(tmp_path: Path):
     )
     try:
         assert bound == port
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_command_endpoint_sends_text_to_runtime_backend(tmp_path: Path):
+    state = _state(tmp_path)
+    backend = CommandBackend()
+    state.set_runtime(backend, None)
+    port = _pick_free_port()
+    server, bound = start_settings_server(
+        state, "127.0.0.1", port, autoshift_tries=5
+    )
+    try:
+        status, payload = _post_json(bound, "/api/command", {"command": "TEXT:P7|MTG"})
+
+        assert status == 200
+        assert payload["status"] == "ok"
+        assert backend.commands == ["TEXT:P7|MTG"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_command_endpoint_rejects_unsafe_command(tmp_path: Path):
+    state = _state(tmp_path)
+    backend = CommandBackend()
+    state.set_runtime(backend, None)
+    port = _pick_free_port()
+    server, bound = start_settings_server(
+        state, "127.0.0.1", port, autoshift_tries=5
+    )
+    try:
+        status, payload = _post_json(bound, "/api/command", {"command": "FACE:happy"})
+
+        assert status == 400
+        assert payload["status"] == "error"
+        assert backend.commands == []
     finally:
         server.shutdown()
         server.server_close()

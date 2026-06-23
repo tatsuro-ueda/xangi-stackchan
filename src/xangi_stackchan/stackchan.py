@@ -61,6 +61,13 @@ def resolve_profile(name: str) -> dict | None:
     return DEVICE_PROFILES.get(name)
 
 
+def normalize_serial_port(port: str | None) -> str:
+    value = str(port or "").strip()
+    if value.lower() == "auto":
+        return ""
+    return value
+
+
 def estimate_wav_duration_seconds(wav_data: bytes) -> float:
     """RIFF/WAVE ヘッダから再生時間を秒で見積もる。
 
@@ -164,7 +171,7 @@ def _ack_predicate_for(cmd: str) -> Callable[[str], bool]:
 
 
 def detect_serial_port() -> str:
-    env_port = os.environ.get("STACKCHAN_PORT")
+    env_port = normalize_serial_port(os.environ.get("STACKCHAN_PORT"))
     if env_port:
         return env_port
 
@@ -188,9 +195,10 @@ def detect_serial_port() -> str:
 class StackchanSerial:
     """USB serial backend for stackchan family devices (K151 / stackchan-atama)."""
 
-    def __init__(self, port: str, baud: int = DEFAULT_BAUD):
+    def __init__(self, port: str, baud: int = DEFAULT_BAUD, auto_detect_port: bool = False):
         self.port = port
         self.baud = baud
+        self.auto_detect_port = auto_detect_port
         self.ser = None
         # Phase 2.x で SerialActor pattern に refactor。`actor` が唯一の serial reader、
         # writer は `actor.write()` を経由してシリアライズ。`_lock` は「transaction
@@ -381,6 +389,8 @@ class StackchanSerial:
             try:
                 with self._lock:
                     self._teardown()
+                    if self.auto_detect_port:
+                        self.port = detect_serial_port()
                     self.open()
             except Exception as exc:
                 if attempt == 1 or attempt % 10 == 0:
@@ -1354,7 +1364,10 @@ def create_backend(config: StackchanConfig):
         return StackchanSimulator()
     if config.wifi:
         return StackchanWifi(config.host)
-    backend = StackchanSerial(config.port or detect_serial_port(), config.baud)
+    configured_port = normalize_serial_port(config.port)
+    auto_detect_port = not configured_port
+    port = configured_port or detect_serial_port()
+    backend = StackchanSerial(port, config.baud, auto_detect_port=auto_detect_port)
     backend.max_wav_bytes = config.max_wav_bytes
     backend.skip_move_during_wav = config.skip_move_during_wav
     return backend

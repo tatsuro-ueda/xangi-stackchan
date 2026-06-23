@@ -574,6 +574,26 @@ def _execute_demo(state: RuntimeState, payload: dict[str, object]) -> dict[str, 
         _DEMO_LOCK.release()
 
 
+def _execute_command(state: RuntimeState, payload: dict[str, object]) -> dict[str, object]:
+    command = str(payload.get("command") or "").strip()
+    if not command:
+        return {"status": "error", "error": "command required"}
+    if len(command) > 120:
+        return {"status": "error", "error": "command too long"}
+    if not (command.startswith("TEXT:") or command.startswith("TIME:")):
+        return {"status": "error", "error": "unsupported command"}
+
+    backend, _ = state.get_runtime()
+    if backend is None:
+        return {"status": "error", "error": "runtime not ready"}
+    if not hasattr(backend, "send_command"):
+        return {"status": "error", "error": "backend does not support commands"}
+    try:
+        return backend.send_command(command)
+    except Exception as exc:
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _get_simulator_backend(state: RuntimeState):
     backend, _ = state.get_runtime()
     if backend is None or not hasattr(backend, "snapshot"):
@@ -725,6 +745,18 @@ def make_handler(state: RuntimeState):
                 # CLI / 自動化向け: 同期実行して結果 JSON を返す。
                 payload = json.loads(raw.decode("utf-8") or "{}")
                 result = _execute_demo(state, payload)
+                status = 200 if result.get("status") == "ok" else (
+                    503 if result.get("error") == "runtime not ready" else 400
+                )
+                body = json.dumps(result, ensure_ascii=False).encode()
+                self._send(status, body, "application/json; charset=utf-8")
+                return
+            if path == "/api/command":
+                # Local companion bridge. Keep it narrow: external callers may
+                # update the clock/text overlay, but not trigger arbitrary
+                # motion, audio, or camera commands.
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                result = _execute_command(state, payload)
                 status = 200 if result.get("status") == "ok" else (
                     503 if result.get("error") == "runtime not ready" else 400
                 )

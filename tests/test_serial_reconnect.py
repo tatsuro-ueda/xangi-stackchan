@@ -19,7 +19,8 @@ import time
 import serial as pyserial
 
 from xangi_stackchan.serial_actor import SerialActor
-from xangi_stackchan.stackchan import StackchanSerial
+from xangi_stackchan.stackchan import StackchanConfig, StackchanSerial, create_backend
+import xangi_stackchan.stackchan as stackchan_module
 
 
 class _DeadWriteSerial:
@@ -128,6 +129,37 @@ class TestStackchanSerialReconnect:
         assert reconnected.wait(3.0), "open 成功後に on_reconnected が呼ばれること"
         assert len(attempts) == 3
         assert sc.is_connected
+
+    def test_auto_detect_port_is_re_resolved_on_reconnect(self, monkeypatch):
+        detected_ports = iter(["/dev/cu.usbmodem1401", "/dev/cu.usbmodem1501"])
+        monkeypatch.setattr(stackchan_module, "detect_serial_port", lambda: next(detected_ports))
+
+        sc = StackchanSerial("/dev/cu.usbmodem1101", auto_detect_port=True)
+        sc.reconnect_interval = 0.05
+        opened_ports = []
+
+        def fake_open():
+            opened_ports.append(sc.port)
+            if len(opened_ports) < 2:
+                raise pyserial.SerialException("stale port")
+
+        monkeypatch.setattr(sc, "open", fake_open)
+        reconnected = threading.Event()
+        sc.on_reconnected = reconnected.set
+
+        sc._on_serial_dead("write: [Errno 5] Input/output error")
+        assert reconnected.wait(3.0), "再検出後に再接続すること"
+        assert opened_ports == ["/dev/cu.usbmodem1401", "/dev/cu.usbmodem1501"]
+        assert sc.port == "/dev/cu.usbmodem1501"
+
+    def test_create_backend_marks_blank_port_as_auto_detect(self, monkeypatch):
+        monkeypatch.setattr(stackchan_module, "detect_serial_port", lambda: "/dev/cu.usbmodem1401")
+
+        backend = create_backend(StackchanConfig(port=""))
+
+        assert isinstance(backend, StackchanSerial)
+        assert backend.port == "/dev/cu.usbmodem1401"
+        assert backend.auto_detect_port is True
 
     def test_send_fails_fast_while_disconnected(self, monkeypatch):
         sc = self._make()

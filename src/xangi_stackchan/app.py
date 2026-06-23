@@ -25,7 +25,7 @@ from .settings import (
 )
 from .settings_server import DEFAULT_SETTINGS_PORT, start_settings_server
 from .sprite_face import SPRITE_FPS, SpriteFaceRenderer
-from .stackchan import DEFAULT_BAUD, DEFAULT_WIFI_HOST, StackchanConfig, StackchanSerial, apply_profile_defaults, create_backend
+from .stackchan import DEFAULT_BAUD, DEFAULT_WIFI_HOST, StackchanConfig, StackchanSerial, apply_profile_defaults, create_backend, normalize_serial_port
 from .voice_conversation import VoiceConversation
 from .head_pet import HeadPetReaction
 from .tts import (
@@ -1447,7 +1447,7 @@ def config_from_args(args: argparse.Namespace) -> BridgeConfig:
             wifi=args.wifi,
             simulator=args.simulator,
             host=args.host,
-            port=args.port,
+            port=normalize_serial_port(args.port),
             baud=args.baud,
             device_profile=args.device_profile,
             max_wav_bytes=args.max_wav_bytes,
